@@ -200,3 +200,5 @@ units. Manual pan/tilt disables AI tracking. V4L2 position reads can reflect the
 commanded value rather than actual gimbal position after tracking or manual movement.
 Custom presets therefore work best after setting the position through these controls.
 
+See [the PR review and Tiny 2 troubleshooting notes](docs/pr-review-2026-10-22.md)
+for the merged changes, excluded PRs, reported firmware issues, and hardware checks.
