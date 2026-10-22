@@ -99,6 +99,9 @@ impl CameraTransport {
         debugging: bool,
     ) -> Result<(), T4lError> {
         let mut data = [0u8; 60];
+        if cmd.len() > data.len() {
+            return Err(T4lError::InvalidSetting);
+        }
         data[..cmd.len()].copy_from_slice(cmd);
 
         self.set_cur(unit, selector, &mut data, debugging)
