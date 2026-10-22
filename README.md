@@ -135,6 +135,8 @@ You'll have full access to all available features in the window that opens.
 The UI is available in two variants:
 
 1. The **dashboard** is a full overview about the current state and all the available controlling functions.
+   Its window can be resized or maximized. The sidebar stays at a readable width,
+   while the controls expand and both panes scroll when needed.
    Via the terminal, you can open it by setting the flag: `tiny4linux-gui --start-as dashboard`
 2. The **widget** is a smaller version intended for permanent viewing.
    It contains only the more important functions you might need more often.

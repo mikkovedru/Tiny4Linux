@@ -441,8 +441,8 @@ enum WindowMode {
 
 fn get_size_for_window_mode(window_mode: WindowMode) -> Size {
     match window_mode {
-        WindowMode::Dashboard => Size::new(860.0, 780.0), // 43:39
-        WindowMode::Widget => Size::new(300.0, 550.0),    // 6:11
+        WindowMode::Dashboard => Size::new(1120.0, 800.0),
+        WindowMode::Widget => Size::new(300.0, 550.0), // 6:11
         WindowMode::Invalid => Size::ZERO,
     }
 }
@@ -462,9 +462,13 @@ fn get_window_settings_for_window_mode(window_mode: WindowMode) -> window::Setti
     let window_size = get_size_for_window_mode(window_mode);
     window::Settings {
         size: window_size,
-        resizable: false,
-        min_size: Some(window_size),
-        max_size: Some(window_size),
+        resizable: window_mode == WindowMode::Dashboard,
+        min_size: Some(if window_mode == WindowMode::Dashboard {
+            Size::new(1000.0, 600.0)
+        } else {
+            window_size
+        }),
+        max_size: (window_mode != WindowMode::Dashboard).then_some(window_size),
         position: get_position_for_window_mode(window_mode),
         decorations: true,
         ..Default::default()
@@ -524,5 +528,30 @@ fn report_debug_result(outcome: Option<bool>) {
         Some(true) => {}
         Some(false) => eprintln!("{}", t!("shared.errors.debug_request_failed")),
         None => eprintln!("{}", t!("shared.errors.debug_input_invalid")),
+    }
+}
+
+#[cfg(test)]
+mod window_tests {
+    use super::*;
+
+    #[test]
+    fn dashboard_can_expand_without_a_maximum_size() {
+        let settings = get_window_settings_for_window_mode(WindowMode::Dashboard);
+        assert!(settings.resizable);
+        assert!(settings.max_size.is_none());
+        let minimum = settings
+            .min_size
+            .expect("the dashboard must remain usable when shrunk");
+        assert!(minimum.width < settings.size.width);
+        assert!(minimum.height < settings.size.height);
+    }
+
+    #[test]
+    fn widget_keeps_its_compact_window_bounds() {
+        let settings = get_window_settings_for_window_mode(WindowMode::Widget);
+        assert!(!settings.resizable);
+        assert_eq!(settings.min_size, Some(settings.size));
+        assert_eq!(settings.max_size, Some(settings.size));
     }
 }

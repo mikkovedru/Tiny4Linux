@@ -21,10 +21,17 @@ use tiny4linux_assets::handle_t4l_asset;
 
 pub fn window_layout(app: &MainPanel) -> Container<'static, Message> {
     match app.window_mode {
-        WindowMode::Dashboard => container(row![
-            dashboard_general_area(app).width(Length::FillPortion(1)),
-            dashboard_settings_area(app).width(Length::FillPortion(3))
-        ])
+        WindowMode::Dashboard => container(
+            row![
+                container(Scrollable::new(dashboard_general_area(app)))
+                    .width(280)
+                    .height(Length::Fill)
+                    .style(|_| general_area_style()),
+                dashboard_settings_area(app),
+            ]
+            .spacing(16),
+        )
+        .padding(16)
         .width(Length::Fill)
         .height(Length::Fill),
         WindowMode::Widget => container(column![
@@ -78,20 +85,30 @@ fn dashboard_general_area(app: &MainPanel) -> Container<'static, Message> {
         .align_x(Alignment::Center)
         .width(Length::Fill)
         .spacing(10)
-        .padding(5),
+        .padding(16),
     )
-    .height(Length::Fill)
-    .style(|_| general_area_style())
 }
 
-fn dashboard_settings_area(app: &MainPanel) -> Column<'static, Message> {
-    column![
-        row![
-            Space::with_width(Length::Fill),
-            button_window_mode_change(WindowMode::Dashboard)
-        ],
-        Scrollable::new(column![settings_area(app), debug_area(app)]).height(Length::Fill)
-    ]
+fn dashboard_settings_area(app: &MainPanel) -> Container<'static, Message> {
+    container(
+        column![
+            row![
+                Space::with_width(Length::Fill),
+                button_window_mode_change(WindowMode::Dashboard)
+            ],
+            Scrollable::new(
+                column![settings_area(app), debug_area(app)]
+                    .spacing(24)
+                    .padding([0, 16])
+            )
+            .height(Length::Fill)
+        ]
+        .spacing(12)
+        .width(Length::Fill)
+        .max_width(1100),
+    )
+    .center_x(Length::Fill)
+    .height(Length::Fill)
 }
 
 fn widget_head_area(app: &MainPanel) -> Container<'static, Message> {
