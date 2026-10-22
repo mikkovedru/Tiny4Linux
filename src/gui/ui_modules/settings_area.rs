@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: EUPL-1.2
 
+use crate::styles::controls::{control_button as button, input as text_input};
 use crate::styles::tooltip_style::tooltip_content;
 use crate::ui_modules::button_exposure_mode::button_exposure_mode;
 use crate::ui_modules::button_hdr::button_hdr;
@@ -9,8 +10,8 @@ use iced::Length;
 use iced::alignment::{Horizontal, Vertical};
 use iced::widget::tooltip::Position;
 use iced::widget::{
-    Container, Row, Slider, button, column, container, horizontal_rule, horizontal_space, row,
-    text, text_input, tooltip,
+    Container, Row, Slider, column, container, horizontal_rule, horizontal_space, row, text,
+    tooltip,
 };
 use iced_font_awesome::fa_icon_solid;
 use rust_i18n::t;

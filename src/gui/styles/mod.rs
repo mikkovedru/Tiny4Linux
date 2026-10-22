@@ -3,6 +3,7 @@
 pub mod button_non_styled;
 pub mod button_unsupported;
 pub mod colors;
+pub mod controls;
 pub mod general_area_style;
 pub mod theme;
 pub mod tooltip_style;

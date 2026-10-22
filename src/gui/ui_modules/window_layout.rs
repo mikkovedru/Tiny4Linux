@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: EUPL-1.2
 
 use crate::styles::button_non_styled::button_non_styled;
+use crate::styles::controls::control_button as button;
 use crate::styles::general_area_style::general_area_style;
 use crate::ui_modules::button_sleep_wake::button_sleep_wake;
 use crate::ui_modules::button_window_mode_change::button_window_mode_change;
@@ -10,8 +11,8 @@ use crate::ui_modules::settings_area::settings_area;
 use crate::{MainPanel, Message, WindowMode};
 use iced::alignment::Vertical;
 use iced::widget::{
-    Column, Container, Scrollable, Space, button, column, container, horizontal_rule,
-    horizontal_space, image, row, text,
+    Column, Container, Scrollable, Space, column, container, horizontal_rule, horizontal_space,
+    image, row, text,
 };
 use iced::{Alignment, FillPortion, Length};
 use rust_i18n::t;

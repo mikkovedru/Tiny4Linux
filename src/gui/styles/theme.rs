@@ -1,20 +1,18 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-use crate::styles::colors::{COLOR_BACKGROUND_DARK, COLOR_PRIMARY_OBSBOT};
+use crate::styles::colors::*;
 use iced::Theme;
 use iced::theme::Palette;
-use iced::theme::palette::Extended;
 
 pub fn obsbot_theme() -> Theme {
-    let palette = Palette {
-        primary: COLOR_PRIMARY_OBSBOT,
-        background: COLOR_BACKGROUND_DARK,
-        success: Default::default(),
-        text: Default::default(),
-        danger: Default::default(),
-    };
-
-    Extended::generate(palette);
-
-    Theme::custom("Tiny4Linux Default Theme".to_string(), palette)
+    Theme::custom(
+        "Tiny4Linux Slate".to_string(),
+        Palette {
+            primary: COLOR_ACCENT,
+            background: COLOR_BACKGROUND_DARK,
+            text: COLOR_TEXT,
+            success: COLOR_SUCCESS,
+            danger: COLOR_DANGER,
+        },
+    )
 }

@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: EUPL-1.2
 
 use crate::Message::{HexDump, HexDump02};
+use crate::styles::controls::{control as secondary, selected as primary};
+use crate::styles::controls::{control_button as button, input as text_input};
 use crate::{MainPanel, Message};
 use iced::Length;
 use iced::alignment::Horizontal;
-use iced::widget::button::{primary, secondary};
-use iced::widget::{Container, button, column, container, horizontal_space, row, text, text_input};
+use iced::widget::{Container, column, container, horizontal_space, row, text};
 use iced_font_awesome::fa_icon_solid;
 use rust_i18n::t;
 

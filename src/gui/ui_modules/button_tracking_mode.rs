@@ -2,10 +2,11 @@
 
 use crate::Message;
 use crate::styles::button_unsupported::button_unsupported;
+use crate::styles::controls::control_button as button;
+use crate::styles::controls::{control as secondary, selected as primary};
 use crate::styles::tooltip_style::tooltip_content;
-use iced::widget::button::{primary, secondary};
 use iced::widget::tooltip::Position;
-use iced::widget::{Container, button, container, text, tooltip};
+use iced::widget::{Container, container, text, tooltip};
 use rust_i18n::t;
 use tiny4linux::{AIMode, TrackingSpeed};
 
@@ -36,7 +37,7 @@ pub fn button_tracking_mode(
     ))
 }
 
-/// A tracking speed button, disabled on cameras without a tracking speed setting.
+/// A tracking speed disabled on cameras without a tracking speed setting.
 pub fn button_tracking_speed(
     speed: TrackingSpeed,
     current_speed: TrackingSpeed,

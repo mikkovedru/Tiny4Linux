@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: EUPL-1.2
 
+use crate::styles::controls::control_button as button;
 use crate::styles::tooltip_style::tooltip_content;
 use crate::{Message, WindowMode};
 use iced::widget::tooltip::Position;
-use iced::widget::{Container, Space, button, container, text, tooltip};
+use iced::widget::{Container, Space, container, text, tooltip};
 use iced_font_awesome::fa_icon_solid;
 use rust_i18n::t;
 
