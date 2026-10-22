@@ -529,6 +529,10 @@ fn evaluate_preset_arg(position_id: Option<i8>, camera: Camera) {
         return evaluate_preset_arg(Option::from(options[selection]), camera);
     }
 
+    if !matches!(position_id, Some(1..=3)) {
+        unsupported(&t!("shared.errors.unknown_preset_position"));
+    }
+
     println!("{}", t!("cli.preset_position.stopping_tracking"));
     camera.set_ai_mode(AIMode::NoTracking).unwrap();
 
