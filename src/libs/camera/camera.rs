@@ -277,10 +277,9 @@ impl Tiny2Camera for Camera {
 
         self.send_cmd(0x2, 0x2, &exposure_mode_type_command)?;
 
-        let exposure_mode_command = ExposureModeCommand::build(mode);
-
-        exposure_mode_command
-            .map(|exposure_mode_command| self.send_cmd(0x2, 0x6, &exposure_mode_command));
+        if let Some(command) = ExposureModeCommand::build(mode) {
+            self.send_cmd(0x2, 0x6, &command)?;
+        }
 
         Ok(())
     }
