@@ -258,7 +258,7 @@ jobs:
           git add .
           git commit -m "🔖 Release Tiny4Linux ${{  github.event.inputs.version }}"
           git tag v${{  github.event.inputs.version }}
-          git push -u origin HEAD:main --tags
+          git push -u origin HEAD:master --tags
 
   create-github-release:
     name: "Create GitHub release"
