@@ -139,6 +139,21 @@ impl MainPanel {
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
+        let refresh = matches!(
+            message,
+            Message::ChangeSleeping(_)
+                | Message::ChangeTracking(_)
+                | Message::ChangeTrackingSpeed(_)
+                | Message::ChangePresetPosition(_)
+                | Message::ChangeHDR(_)
+                | Message::ChangeExposure(_)
+                | Message::ChangeZoom(_)
+                | Message::ChangePan(_)
+                | Message::ChangeTilt(_)
+                | Message::RecallCustomPreset(_)
+                | Message::SaveCustomPreset
+                | Message::DeleteCustomPreset(_)
+        );
         if !matches!(message, Message::CheckCamera) {
             self.operation_error = None;
         }
@@ -150,7 +165,50 @@ impl MainPanel {
                 Task::none()
             }
         };
+        if refresh {
+            self.refresh_camera_state();
+        }
         task
+    }
+
+    fn refresh_camera_state(&mut self) {
+        let Some(camera) = self.camera.as_ref() else {
+            return;
+        };
+        let Ok(status) = camera.get_status() else {
+            self.camera = None;
+            self.awake = SleepMode::Unknown;
+            self.tracking = AIMode::Unknown;
+            return;
+        };
+        self.awake = status.awake;
+        self.tracking = camera.get_ai_mode().unwrap_or(status.ai_mode);
+        self.tracking_speed = status.speed;
+        self.hdr_on = status.hdr_on;
+        if let Ok((min, max)) = camera.get_zoom_range() {
+            self.zoom_min = min;
+            self.zoom_max = max;
+            self.zoom = camera.get_zoom_absolute().ok();
+            self.zoom_text = self.zoom.map(|value| value.to_string()).unwrap_or_default();
+        } else {
+            self.zoom = None;
+        }
+        if let Ok((min, max)) = camera.get_pan_range() {
+            self.pan_min = min;
+            self.pan_max = max;
+            self.pan = camera.get_pan_absolute().ok();
+            self.pan_text = self.pan.map(|value| value.to_string()).unwrap_or_default();
+        } else {
+            self.pan = None;
+        }
+        if let Ok((min, max)) = camera.get_tilt_range() {
+            self.tilt_min = min;
+            self.tilt_max = max;
+            self.tilt = camera.get_tilt_absolute().ok();
+            self.tilt_text = self.tilt.map(|value| value.to_string()).unwrap_or_default();
+        } else {
+            self.tilt = None;
+        }
     }
 
     fn try_update(&mut self, message: Message) -> Result<Task<Message>, tiny4linux::T4lError> {
@@ -339,7 +397,10 @@ impl MainPanel {
                 report_debug_result(Some(camera.dump_02().is_ok()));
                 Ok(Task::none())
             }
-            Message::CheckCamera => Ok(Task::none()),
+            Message::CheckCamera => {
+                self.refresh_camera_state();
+                Ok(Task::none())
+            }
         }
     }
 
