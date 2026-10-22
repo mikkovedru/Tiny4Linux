@@ -120,11 +120,24 @@ fn main() {
 
     let args = Args::parse();
 
+    match &args.subcommand {
+        Command::Version => {
+            println!("t4l version: {}", env!("CARGO_PKG_VERSION"));
+            return;
+        }
+        Command::Completions { shell } => {
+            use clap::CommandFactory;
+            generate(*shell, &mut Args::command(), "t4l", &mut std::io::stdout());
+            return;
+        }
+        _ => {}
+    }
+
     let mut camera = Camera::detect().ok();
 
     if camera.is_none() {
-        println!("{}", t!("shared.errors.no_camera"));
-        return;
+        eprintln!("{}", t!("shared.errors.no_camera"));
+        std::process::exit(1);
     }
 
     if args.verbose {
