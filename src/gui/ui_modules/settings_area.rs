@@ -25,7 +25,7 @@ pub fn settings_area(app: &MainPanel) -> Container<'static, Message> {
             horizontal_rule(8),
             tracking_modes(
                 app.window_mode == WindowMode::Widget,
-                app.tracking,
+                app.tracking.mode(),
                 app.camera.as_ref().map(|camera| camera.model()),
             ),
             tracking_speed(

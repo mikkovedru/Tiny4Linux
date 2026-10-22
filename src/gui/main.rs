@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: EUPL-1.2
 
 mod styles;
+mod tracking_selection;
 mod ui_modules;
 
 use crate::styles::theme::obsbot_theme;
@@ -11,10 +12,12 @@ use iced::window::Position;
 use iced::{Element, Point};
 use iced::{Length, Size, Subscription, Task, time, window};
 use rust_i18n::{i18n, set_locale, t};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tiny4linux::{
-    AIMode, Camera, CustomPreset, ExposureMode, SleepMode, Tiny2Camera, TrackingSpeed, get_language,
+    AIMode, Camera, CameraModel, CustomPreset, ExposureMode, SleepMode, Tiny2Camera, TrackingSpeed,
+    get_language,
 };
+use tracking_selection::TrackingSelection;
 
 i18n!("src/locales", fallback = "en");
 
@@ -43,6 +46,7 @@ enum Message {
     TextInput(String),
     TextInput02(String),
     CheckCamera,
+    CheckTracking,
     SendCommand,
     SendCommand02,
     HexDump,
@@ -54,7 +58,7 @@ struct MainPanel {
     main_window_id: Option<window::Id>,
     window_mode: WindowMode,
     awake: SleepMode,
-    tracking: AIMode,
+    tracking: TrackingSelection,
     tracking_speed: TrackingSpeed,
     hdr_on: bool,
     operation_error: Option<String>,
@@ -90,7 +94,10 @@ impl MainPanel {
         // be asked for separately to start with the right button selected (#72)
         let tracking = camera
             .as_ref()
-            .and_then(|c| c.get_ai_mode().ok())
+            .and_then(|c| match c.model() {
+                CameraModel::Tiny2 => Some(status.ai_mode),
+                CameraModel::Tiny4K => c.get_ai_mode().ok(),
+            })
             .unwrap_or(status.ai_mode);
         let zoom_range = camera.as_ref().and_then(|c| c.get_zoom_range().ok());
         let zoom = zoom_range.and_then(|_| camera.as_ref()?.get_zoom_absolute().ok());
@@ -112,7 +119,7 @@ impl MainPanel {
                 main_window_id: None,
                 window_mode,
                 awake: status.awake,
-                tracking,
+                tracking: TrackingSelection::new(tracking),
                 tracking_speed: status.speed,
                 hdr_on: status.hdr_on,
                 operation_error: None,
@@ -139,6 +146,10 @@ impl MainPanel {
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
+        if message == Message::CheckTracking {
+            self.refresh_tracking();
+            return Task::none();
+        }
         let refresh = matches!(
             message,
             Message::ChangeSleeping(_)
@@ -178,11 +189,17 @@ impl MainPanel {
         let Ok(status) = camera.get_status() else {
             self.camera = None;
             self.awake = SleepMode::Unknown;
-            self.tracking = AIMode::Unknown;
+            self.tracking.disconnect();
             return;
         };
         self.awake = status.awake;
-        self.tracking = camera.get_ai_mode().unwrap_or(status.ai_mode);
+        let tracking = match camera.model() {
+            CameraModel::Tiny2 => status.ai_mode,
+            CameraModel::Tiny4K => camera.get_ai_mode().unwrap_or(AIMode::Unknown),
+        };
+        if self.tracking.observe(tracking, Instant::now()) {
+            self.operation_error = Some(t!("shared.errors.tracking_not_confirmed").to_string());
+        }
         self.tracking_speed = status.speed;
         self.hdr_on = status.hdr_on;
         if let Ok((min, max)) = camera.get_zoom_range() {
@@ -211,6 +228,26 @@ impl MainPanel {
         }
     }
 
+    fn refresh_tracking(&mut self) {
+        let Some(camera) = self.camera.as_ref() else {
+            self.tracking.disconnect();
+            return;
+        };
+        match camera.get_ai_mode() {
+            Ok(mode) => {
+                if self.tracking.observe(mode, Instant::now()) {
+                    self.operation_error =
+                        Some(t!("shared.errors.tracking_not_confirmed").to_string());
+                }
+            }
+            Err(error) => {
+                self.operation_error = Some(error.to_string());
+                self.tracking.disconnect();
+                self.camera = None;
+            }
+        }
+    }
+
     fn try_update(&mut self, message: Message) -> Result<Task<Message>, tiny4linux::T4lError> {
         if self.camera.is_none() {
             self.camera = Camera::detect().ok();
@@ -220,6 +257,7 @@ impl MainPanel {
             }
         } else if !self.camera.as_ref().unwrap().get_status().is_ok() {
             self.camera = None;
+            self.tracking.disconnect();
             return Ok(Task::none());
         }
 
@@ -265,8 +303,8 @@ impl MainPanel {
                     return Ok(Task::none());
                 }
 
-                self.tracking = tracking_type;
                 camera.set_ai_mode(tracking_type)?;
+                self.tracking.request(tracking_type, Instant::now());
                 Ok(Task::none())
             }
             Message::ChangeTrackingSpeed(new_speed) => {
@@ -280,9 +318,9 @@ impl MainPanel {
                 Ok(Task::none())
             }
             Message::ChangePresetPosition(new_position) => {
-                self.tracking = AIMode::NoTracking;
                 self.awake = SleepMode::Awake;
                 camera.set_ai_mode(AIMode::NoTracking)?;
+                self.tracking.request(AIMode::NoTracking, Instant::now());
                 if camera.goto_preset_position(new_position).is_err() {
                     eprintln!("{}", t!("shared.errors.unknown_preset_position"));
                 }
@@ -397,6 +435,7 @@ impl MainPanel {
                 report_debug_result(Some(camera.dump_02().is_ok()));
                 Ok(Task::none())
             }
+            Message::CheckTracking => Ok(Task::none()),
             Message::CheckCamera => {
                 self.refresh_camera_state();
                 Ok(Task::none())
@@ -426,6 +465,8 @@ impl MainPanel {
     fn subscription(&self) -> Subscription<Message> {
         if self.camera.is_none() {
             time::every(Duration::from_secs(4)).map(|_| Message::CheckCamera)
+        } else if self.tracking.is_pending() {
+            time::every(Duration::from_millis(100)).map(|_| Message::CheckTracking)
         } else {
             time::every(Duration::from_secs(20)).map(|_| Message::CheckCamera)
         }

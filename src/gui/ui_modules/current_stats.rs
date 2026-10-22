@@ -49,7 +49,7 @@ pub fn current_stats(app: &MainPanel) -> Container<'static, Message> {
                 .spacing(10),
                 row![
                     text(TEXT_INDENT_LONG),
-                    match app.tracking {
+                    match app.tracking.mode() {
                         AIMode::NoTracking => {
                             row![fa_icon_solid("tape"), text(t!("display.ai_mode.static"))]
                                 .spacing(10)
