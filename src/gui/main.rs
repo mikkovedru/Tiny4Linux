@@ -6,14 +6,14 @@ mod ui_modules;
 use crate::styles::theme::obsbot_theme;
 use crate::ui_modules::window_layout::window_layout;
 use iced::alignment::{Horizontal, Vertical};
-use iced::widget::{Container, text};
+use iced::widget::{Container, column, text};
 use iced::window::Position;
 use iced::{Element, Point};
 use iced::{Length, Size, Subscription, Task, time, window};
 use rust_i18n::{i18n, set_locale, t};
 use std::time::Duration;
 use tiny4linux::{
-    AIMode, Camera, ExposureMode, SleepMode, Tiny2Camera, TrackingSpeed, get_language,
+    AIMode, Camera, CustomPreset, ExposureMode, SleepMode, Tiny2Camera, TrackingSpeed, get_language,
 };
 
 i18n!("src/locales", fallback = "en");
@@ -29,6 +29,16 @@ enum Message {
     ChangePresetPosition(i8),
     ChangeHDR(bool),
     ChangeExposure(ExposureMode),
+    ChangeZoom(i32),
+    ChangeZoomText(String),
+    ChangePan(i32),
+    ChangePanText(String),
+    ChangeTilt(i32),
+    ChangeTiltText(String),
+    CustomPresetName(String),
+    SaveCustomPreset,
+    RecallCustomPreset(String),
+    DeleteCustomPreset(String),
     ChangeDebugging(bool),
     TextInput(String),
     TextInput02(String),
@@ -47,6 +57,21 @@ struct MainPanel {
     tracking: AIMode,
     tracking_speed: TrackingSpeed,
     hdr_on: bool,
+    operation_error: Option<String>,
+    zoom: Option<i32>,
+    zoom_min: i32,
+    zoom_max: i32,
+    zoom_text: String,
+    pan: Option<i32>,
+    pan_min: i32,
+    pan_max: i32,
+    pan_text: String,
+    tilt: Option<i32>,
+    tilt_min: i32,
+    tilt_max: i32,
+    tilt_text: String,
+    custom_presets: Vec<CustomPreset>,
+    custom_preset_name: String,
     debugging_on: bool,
     text_input: String,
     text_input_02: String,
@@ -67,6 +92,19 @@ impl MainPanel {
             .as_ref()
             .and_then(|c| c.get_ai_mode().ok())
             .unwrap_or(status.ai_mode);
+        let zoom_range = camera.as_ref().and_then(|c| c.get_zoom_range().ok());
+        let zoom = zoom_range.and_then(|_| camera.as_ref()?.get_zoom_absolute().ok());
+
+        let pan_range = camera.as_ref().and_then(|c| c.get_pan_range().ok());
+        let pan = pan_range.and_then(|_| camera.as_ref()?.get_pan_absolute().ok());
+
+        let tilt_range = camera.as_ref().and_then(|c| c.get_tilt_range().ok());
+        let tilt = tilt_range.and_then(|_| camera.as_ref()?.get_tilt_absolute().ok());
+
+        let custom_presets = camera
+            .as_ref()
+            .map(|c| c.get_custom_presets())
+            .unwrap_or_default();
 
         (
             MainPanel {
@@ -77,6 +115,21 @@ impl MainPanel {
                 tracking,
                 tracking_speed: status.speed,
                 hdr_on: status.hdr_on,
+                operation_error: None,
+                zoom,
+                zoom_min: zoom_range.map(|r| r.0).unwrap_or(0),
+                zoom_max: zoom_range.map(|r| r.1).unwrap_or(0),
+                zoom_text: zoom.map(|z| z.to_string()).unwrap_or_default(),
+                pan,
+                pan_min: pan_range.map(|r| r.0).unwrap_or(0),
+                pan_max: pan_range.map(|r| r.1).unwrap_or(0),
+                pan_text: pan.map(|p| p.to_string()).unwrap_or_default(),
+                tilt,
+                tilt_min: tilt_range.map(|r| r.0).unwrap_or(0),
+                tilt_max: tilt_range.map(|r| r.1).unwrap_or(0),
+                tilt_text: tilt.map(|t| t.to_string()).unwrap_or_default(),
+                custom_presets,
+                custom_preset_name: String::new(),
                 debugging_on: false,
                 text_input: String::new(),
                 text_input_02: String::new(),
@@ -86,15 +139,30 @@ impl MainPanel {
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
+        if !matches!(message, Message::CheckCamera) {
+            self.operation_error = None;
+        }
+        let task = match self.try_update(message) {
+            Ok(task) => task,
+            Err(error) => {
+                eprintln!("{error}");
+                self.operation_error = Some(error.to_string());
+                Task::none()
+            }
+        };
+        task
+    }
+
+    fn try_update(&mut self, message: Message) -> Result<Task<Message>, tiny4linux::T4lError> {
         if self.camera.is_none() {
             self.camera = Camera::detect().ok();
 
             if self.camera.is_none() {
-                return Task::none();
+                return Ok(Task::none());
             }
         } else if !self.camera.as_ref().unwrap().get_status().is_ok() {
             self.camera = None;
-            return Task::none();
+            return Ok(Task::none());
         }
 
         let camera = self.camera.as_ref().unwrap();
@@ -112,83 +180,138 @@ impl MainPanel {
 
                 let apply_task = Task::done(Message::ApplyWindowMode(new_mode));
 
-                Task::batch([close_task, open_task, apply_task])
+                Ok(Task::batch([close_task, open_task, apply_task]))
             }
             Message::ApplyWindowMode(new_mode) => {
                 self.window_mode = new_mode;
-                Task::none()
+                Ok(Task::none())
             }
             Message::ChangeMainWindowId(id) => {
                 self.main_window_id = id;
-                Task::none()
+                Ok(Task::none())
             }
             Message::ChangeSleeping(should_sleep) => {
                 if should_sleep {
                     self.awake = SleepMode::Sleep;
-                    camera.set_sleep_mode(SleepMode::Sleep).unwrap();
+                    camera.set_sleep_mode(SleepMode::Sleep)?;
                 } else {
                     self.awake = SleepMode::Awake;
-                    camera.set_sleep_mode(SleepMode::Awake).unwrap();
+                    camera.set_sleep_mode(SleepMode::Awake)?;
                 }
 
-                Task::none()
+                Ok(Task::none())
             }
             Message::ChangeTracking(tracking_type) => {
                 if !camera.supports_ai_mode(tracking_type) {
                     eprintln!("{}", t!("shared.errors.unsupported_tracking_mode"));
-                    return Task::none();
+                    return Ok(Task::none());
                 }
 
                 self.tracking = tracking_type;
-                camera.set_ai_mode(tracking_type).unwrap();
-                Task::none()
+                camera.set_ai_mode(tracking_type)?;
+                Ok(Task::none())
             }
             Message::ChangeTrackingSpeed(new_speed) => {
                 if !camera.supports_tracking_speed() {
                     eprintln!("{}", t!("shared.errors.unsupported_tracking_speed"));
-                    return Task::none();
+                    return Ok(Task::none());
                 }
 
                 self.tracking_speed = new_speed;
-                camera.set_tracking_speed(new_speed).unwrap();
-                Task::none()
+                camera.set_tracking_speed(new_speed)?;
+                Ok(Task::none())
             }
             Message::ChangePresetPosition(new_position) => {
                 self.tracking = AIMode::NoTracking;
                 self.awake = SleepMode::Awake;
-                camera.set_ai_mode(AIMode::NoTracking).unwrap();
+                camera.set_ai_mode(AIMode::NoTracking)?;
                 if camera.goto_preset_position(new_position).is_err() {
                     eprintln!("{}", t!("shared.errors.unknown_preset_position"));
                 }
-                Task::none()
+                Ok(Task::none())
             }
             Message::ChangeHDR(new_mode) => {
                 self.hdr_on = new_mode;
-                camera.set_hdr_mode(new_mode).unwrap();
-                Task::none()
+                camera.set_hdr_mode(new_mode)?;
+                Ok(Task::none())
             }
             Message::ChangeExposure(mode) => {
                 if mode == ExposureMode::Manual && !camera.supports_manual_exposure() {
                     eprintln!("{}", t!("shared.errors.unsupported_manual_exposure"));
-                    return Task::none();
+                    return Ok(Task::none());
                 }
 
-                camera.set_exposure_mode(mode).unwrap();
-                Task::none()
+                camera.set_exposure_mode(mode)?;
+                Ok(Task::none())
+            }
+            Message::ChangeZoom(value) => {
+                let value = value.clamp(self.zoom_min, self.zoom_max);
+                self.zoom = Some(value);
+                self.zoom_text = value.to_string();
+                camera.set_zoom_absolute(value)?;
+                Ok(Task::none())
+            }
+            Message::ChangeZoomText(s) => {
+                self.zoom_text = s;
+                Ok(Task::none())
+            }
+            Message::ChangePan(value) => {
+                let value = value.clamp(self.pan_min, self.pan_max);
+                self.pan = Some(value);
+                self.pan_text = value.to_string();
+                camera.set_pan_absolute(value)?;
+                Ok(Task::none())
+            }
+            Message::ChangePanText(s) => {
+                self.pan_text = s;
+                Ok(Task::none())
+            }
+            Message::ChangeTilt(value) => {
+                let value = value.clamp(self.tilt_min, self.tilt_max);
+                self.tilt = Some(value);
+                self.tilt_text = value.to_string();
+                camera.set_tilt_absolute(value)?;
+                Ok(Task::none())
+            }
+            Message::ChangeTiltText(s) => {
+                self.tilt_text = s;
+                Ok(Task::none())
+            }
+            Message::CustomPresetName(s) => {
+                self.custom_preset_name = s;
+                Ok(Task::none())
+            }
+            Message::SaveCustomPreset => {
+                let name = self.custom_preset_name.trim();
+                if !name.is_empty() {
+                    camera.save_custom_preset(name)?;
+                    self.custom_presets = camera.get_custom_presets();
+                    self.custom_preset_name.clear();
+                }
+                Ok(Task::none())
+            }
+            Message::RecallCustomPreset(name) => {
+                camera.recall_custom_preset(&name)?;
+                Ok(Task::none())
+            }
+            Message::DeleteCustomPreset(name) => {
+                camera.delete_custom_preset(&name)?;
+                self.custom_presets = camera.get_custom_presets();
+                Ok(Task::none())
             }
             Message::ChangeDebugging(new_mode) => {
                 self.debugging_on = new_mode;
                 let mutable_camera = self.camera.as_mut().unwrap();
                 mutable_camera.set_debugging(new_mode);
-                Task::none()
+                Ok(Task::none())
             }
             Message::TextInput(s) => {
                 self.text_input = s;
-                Task::none()
+                Ok(Task::none())
             }
             Message::TextInput02(s) => {
                 self.text_input_02 = s;
-                Task::none()
+                Ok(Task::none())
             }
             Message::SendCommand => {
                 report_debug_result(
@@ -196,7 +319,7 @@ impl MainPanel {
                         .ok()
                         .map(|c| camera.send_cmd(0x2, 0x6, &c).is_ok()),
                 );
-                Task::none()
+                Ok(Task::none())
             }
             Message::SendCommand02 => {
                 report_debug_result(
@@ -204,25 +327,30 @@ impl MainPanel {
                         .ok()
                         .map(|c| camera.send_cmd(0x2, 0x2, &c).is_ok()),
                 );
-                Task::none()
+                Ok(Task::none())
             }
             Message::HexDump => {
                 report_debug_result(Some(camera.dump().is_ok()));
-                Task::none()
+                Ok(Task::none())
             }
             Message::HexDump02 => {
                 // the Tiny 4K stalls a cold GET_CUR on selector 2, which used to take
                 // the whole window down through unwrap (#72)
                 report_debug_result(Some(camera.dump_02().is_ok()));
-                Task::none()
+                Ok(Task::none())
             }
-            Message::CheckCamera => Task::none(),
+            Message::CheckCamera => Ok(Task::none()),
         }
     }
 
     fn view(&'_ self) -> Element<'_, Message> {
         if self.camera.is_some() {
-            get_current_ui_elements(self).into()
+            let content = column![get_current_ui_elements(self)].height(Length::Fill);
+            if let Some(error) = &self.operation_error {
+                content.push(text(error.clone())).into()
+            } else {
+                content.into()
+            }
         } else {
             text(t!("shared.errors.no_camera"))
                 .size(20)

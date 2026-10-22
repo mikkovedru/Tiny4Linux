@@ -117,3 +117,26 @@ In the following example, the shell-completion scripts are generated for bash wi
 ```shell
 t4l completions bash > /.local/share/bash-completion/completions/t4l
 ```
+
+## Pan, tilt, zoom and local presets
+
+With no value, `pan`, `tilt` and `zoom` print the current V4L2 value and range.
+With a value, they set that control. Pan and tilt use arcseconds (3600 per degree)
+and disable AI tracking. Use the range reported by your camera for zoom.
+
+```shell
+t4l pan
+t4l tilt
+t4l zoom
+t4l pan 0
+t4l tilt 7200
+t4l preset-save Desk
+t4l preset-list
+t4l preset-recall Desk
+t4l preset-delete Desk
+```
+
+Local presets are separate from the three presets stored in OBSBOT Center. They live
+in `$XDG_CONFIG_HOME/tiny4linux/custom_presets.json`, falling back to
+`~/.config/tiny4linux/custom_presets.json`. V4L2 pan/tilt readback can be cached, so
+save a local preset after positioning the camera with these controls.

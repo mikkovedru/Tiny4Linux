@@ -9,4 +9,6 @@ mod i18n;
 mod usbio;
 
 pub use camera::*;
+pub use errors::T4lError;
 pub use i18n::*;
+pub use usbio::SUPPORTED_CAMERAS;
