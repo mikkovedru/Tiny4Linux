@@ -45,9 +45,11 @@ pub struct Camera {
 
 impl Camera {
     pub fn new(hint: &str) -> Result<Self, T4lError> {
+        let transport = CameraTransport::new(hint)?;
+
         Ok(Self {
-            transport: CameraTransport::new(hint)?,
-            model: CameraModel::from_hint(hint),
+            model: CameraModel::detect(hint, transport.card_name().as_deref()),
+            transport,
             debugging: false,
             sequence_nr: AtomicU16::new(Self::first_sequence_nr()),
         })
@@ -182,7 +184,9 @@ impl Tiny2Camera for Camera {
     /// selector 2.
     fn set_sleep_mode(&self, mode: SleepMode) -> Result<(), T4lError> {
         match self.model {
-            CameraModel::Tiny2 => self.send_cmd(0x2, 0x2, &SleepCommand::build(mode)?),
+            CameraModel::Tiny2 | CameraModel::Tiny2Lite => {
+                self.send_cmd(0x2, 0x2, &SleepCommand::build(mode)?)
+            }
             CameraModel::Tiny4K => self.send_cmd(0x2, 0x2, &LegacySleepCommand::build(mode)?),
         }
     }
@@ -197,7 +201,9 @@ impl Tiny2Camera for Camera {
     /// sequence of legacy frames on selector 2 instead (#72).
     fn set_ai_mode(&self, mode: AIMode) -> Result<(), T4lError> {
         match self.model {
-            CameraModel::Tiny2 => self.send_cmd(0x2, 0x6, &AIModeCommand::build(mode)?),
+            CameraModel::Tiny2 | CameraModel::Tiny2Lite => {
+                self.send_cmd(0x2, 0x6, &AIModeCommand::build(mode)?)
+            }
             CameraModel::Tiny4K => {
                 for (index, frame) in LegacyAiModeCommand::build(mode)?.iter().enumerate() {
                     if index > 0 {
@@ -218,7 +224,7 @@ impl Tiny2Camera for Camera {
     /// zero and answers a separate request instead (#72).
     fn get_ai_mode(&self) -> Result<AIMode, T4lError> {
         match self.model {
-            CameraModel::Tiny2 => Ok(self.get_status()?.ai_mode),
+            CameraModel::Tiny2 | CameraModel::Tiny2Lite => Ok(self.get_status()?.ai_mode),
             CameraModel::Tiny4K => self.read_ai_mode_tiny_4k(),
         }
     }
@@ -230,7 +236,7 @@ impl Tiny2Camera for Camera {
     /// move (#72). Presets are stored by the vendor app; this only recalls them.
     fn goto_preset_position(&self, preset_nr: i8) -> Result<(), T4lError> {
         match self.model {
-            CameraModel::Tiny2 => {
+            CameraModel::Tiny2 | CameraModel::Tiny2Lite => {
                 self.send_cmd(0x2, 0x2, &GotoPresetPositionCommand::build(preset_nr)?)
             }
             CameraModel::Tiny4K => {

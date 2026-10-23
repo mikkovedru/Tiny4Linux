@@ -68,6 +68,11 @@ impl CameraTransport {
         self.handle.info()
     }
 
+    /// The V4L2 card name of the opened camera, e.g. "OBSBOT Tiny 2 Lite: OBSBOT Tiny".
+    pub fn card_name(&self) -> Option<String> {
+        self.handle.card_name()
+    }
+
     /// Sends a hexadecimal command to the specified unit and selector using the provided command data.
     ///
     /// # Parameters

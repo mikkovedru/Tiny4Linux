@@ -16,22 +16,26 @@ impl CameraStatus {
 
     /// Decodes the status buffer for a specific model.
     ///
-    /// Only the sleep state differs so far: the Tiny 4K reports its device run
-    /// status in byte `0x09`, while byte `0x02` — where the Tiny 2 keeps its sleep
-    /// flag — is a reserved field that is always zero on the 4K (#72).
+    /// The Tiny 4K reports its device run status in byte `0x09`, while byte `0x02`
+    /// — where the Tiny 2 keeps its sleep flag — is a reserved field that is always
+    /// zero on the 4K (#72).
+    ///
+    /// The Tiny 2 Lite keeps its tracking speed at `0x24` and reports hand tracking
+    /// differently, see [`Self::decode_ai_mode_tiny_2_lite`] (#172).
     pub fn decode_for(model: CameraModel, bytes: &[u8]) -> Self {
         CameraStatus {
             awake: match model {
-                CameraModel::Tiny2 => Self::decode_sleep_mode(bytes),
+                CameraModel::Tiny2 | CameraModel::Tiny2Lite => Self::decode_sleep_mode(bytes),
                 CameraModel::Tiny4K => Self::decode_sleep_mode_tiny_4k(bytes),
             },
             ai_mode: match model {
                 CameraModel::Tiny2 => Self::decode_ai_mode(bytes),
+                CameraModel::Tiny2Lite => Self::decode_ai_mode_tiny_2_lite(bytes),
                 // the Tiny 4K leaves the Tiny 2 AI fields at zero, which would
                 // decode to a confident "no tracking" regardless of the truth
                 CameraModel::Tiny4K => AIMode::Unknown,
             },
-            speed: Self::decode_tracking_speed(bytes),
+            speed: Self::decode_tracking_speed(bytes, model),
             hdr_on: Self::decode_hdr_on(bytes),
         }
     }
@@ -74,8 +78,24 @@ impl CameraStatus {
         }
     }
 
-    fn decode_tracking_speed(bytes: &[u8]) -> TrackingSpeed {
-        match bytes[0x21] {
+    /// The Tiny 2 Lite reports hand tracking as `(3, 0)`. It shows `(6, 0)` only for
+    /// a moment while switching between modes, so that must not decode to hand there.
+    fn decode_ai_mode_tiny_2_lite(bytes: &[u8]) -> AIMode {
+        match (bytes[0x18], bytes[0x1c]) {
+            (3, 0) => AIMode::Hand,
+            (6, _) => AIMode::Unknown,
+            _ => Self::decode_ai_mode(bytes),
+        }
+    }
+
+    fn decode_tracking_speed(bytes: &[u8], model: CameraModel) -> TrackingSpeed {
+        // On the Tiny 2 Lite 0x21 holds an unrelated value (3), the speed is at 0x24
+        let offset = match model {
+            CameraModel::Tiny2 | CameraModel::Tiny4K => 0x21,
+            CameraModel::Tiny2Lite => 0x24,
+        };
+
+        match bytes[offset] {
             0 => TrackingSpeed::Standard,
             2 => TrackingSpeed::Sport,
             _ => TrackingSpeed::Standard,
@@ -100,7 +120,7 @@ impl CameraStatus {
 mod tests {
     mod unit {
         mod decode {
-            use crate::{AIMode, CameraStatus, SleepMode, TrackingSpeed};
+            use crate::{AIMode, CameraModel, CameraStatus, SleepMode, TrackingSpeed};
             use test_case::test_case;
 
             const RAW_TEST_STRING: [u8; 57] = [0; 57];
@@ -162,6 +182,43 @@ mod tests {
                 assert_eq!(expected, status.hdr_on);
             }
 
+            #[test_case(0x00, TrackingSpeed::Standard; "standard")]
+            #[test_case(0x02, TrackingSpeed::Sport; "sport")]
+            fn tracking_speed_lite(hex_value: u8, expected: TrackingSpeed) {
+                let mut test_string = RAW_TEST_STRING;
+                // The Lite keeps 0x03 at the Tiny 2 speed offset, whatever the speed is
+                test_string[0x21] = 0x03;
+                test_string[0x24] = hex_value;
+
+                let status = CameraStatus::decode_for(CameraModel::Tiny2Lite, &test_string);
+
+                assert_eq!(expected, status.speed);
+            }
+
+            #[test_case(0x03, 0x00, AIMode::Hand; "hand")]
+            #[test_case(0x06, 0x00, AIMode::Unknown; "switching transient is not hand")]
+            #[test_case(0x02, 0x01, AIMode::UpperBody; "shared codes still decode")]
+            fn ai_mode_lite(hex_value1: u8, hex_value2: u8, expected: AIMode) {
+                let mut test_string = RAW_TEST_STRING;
+                test_string[0x18] = hex_value1;
+                test_string[0x1c] = hex_value2;
+
+                let status = CameraStatus::decode_for(CameraModel::Tiny2Lite, &test_string);
+
+                assert_eq!(expected, status.ai_mode);
+            }
+
+            #[test]
+            fn tiny_2_keeps_its_hand_code() {
+                // (3, 0) is the Lite's hand code only; the Tiny 2 decoding is unchanged
+                let mut test_string = RAW_TEST_STRING;
+                test_string[0x18] = 0x06;
+
+                let status = CameraStatus::decode_for(CameraModel::Tiny2, &test_string);
+
+                assert_eq!(AIMode::Hand, status.ai_mode);
+            }
+
             #[test]
             fn status_defaults() {
                 let default_status = CameraStatus::default();
@@ -184,7 +241,7 @@ mod tests {
 
     mod integration {
         mod camera_status {
-            use crate::{AIMode, CameraStatus, SleepMode, TrackingSpeed};
+            use crate::{AIMode, CameraModel, CameraStatus, SleepMode, TrackingSpeed};
 
             #[test]
             fn decode_status() {
@@ -199,6 +256,23 @@ mod tests {
                 assert_eq!(status.awake, SleepMode::Awake);
                 assert_eq!(status.hdr_on, true);
                 assert_eq!(status.ai_mode, AIMode::UpperBody);
+                assert_eq!(status.speed, TrackingSpeed::Sport);
+            }
+
+            #[test]
+            fn decode_status_lite() {
+                // Read from a Tiny 2 Lite set to normal tracking, sport speed and HDR on
+                let data = [
+                    0x27, 0x01, 0x00, 0x01, 0x00, 0x00, 0x01, 0x00, 0x01, 0x01, 0x78, 0x00, 0x00,
+                    0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x21, 0x00, 0x02, 0x01,
+                    0x03, 0x00, 0x00, 0x00, 0x00, 0x1e, 0x00, 0x03, 0x10, 0x00, 0x02, 0x00, 0x00,
+                    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                    0x00, 0x00, 0x00, 0x00, 0x00,
+                ];
+                let status = CameraStatus::decode_for(CameraModel::Tiny2Lite, &data);
+                assert_eq!(status.awake, SleepMode::Awake);
+                assert_eq!(status.hdr_on, true);
+                assert_eq!(status.ai_mode, AIMode::NormalTracking);
                 assert_eq!(status.speed, TrackingSpeed::Sport);
             }
         }
