@@ -25,6 +25,13 @@ pub trait UvcUsbIo {
 #[derive(Debug)]
 pub struct CameraHandle(File);
 
+impl CameraHandle {
+    /// Returns the device opened for camera controls, even when its number changes.
+    pub fn device_path(&self) -> std::io::Result<std::path::PathBuf> {
+        std::fs::read_link(format!("/proc/self/fd/{}", self.0.as_raw_fd()))
+    }
+}
+
 // Keep the buffer written by the kernel, rather than reading the original copy.
 fn read_ioctl<T: Copy>(
     value: T,
@@ -320,6 +327,15 @@ const UVC_GET_DEF: u8 = 0x87;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn device_path_belongs_to_the_open_handle() {
+        let handle = CameraHandle::from(File::open("/dev/null").unwrap());
+        assert_eq!(
+            handle.device_path().unwrap(),
+            std::path::Path::new("/dev/null")
+        );
+    }
 
     #[test]
     fn reads_the_value_written_by_the_ioctl() {

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: EUPL-1.2
 
+use crate::preview::Placement;
 use crate::styles::button_non_styled::button_non_styled;
 use crate::styles::controls::control_button as button;
 use crate::styles::general_area_style::general_area_style;
@@ -8,6 +9,7 @@ use crate::ui_modules::button_window_mode_change::button_window_mode_change;
 use crate::ui_modules::current_stats::current_stats;
 use crate::ui_modules::debug_area::debug_area;
 use crate::ui_modules::settings_area::settings_area;
+use crate::ui_modules::video_preview;
 use crate::{MainPanel, Message, WindowMode};
 use iced::alignment::Vertical;
 use iced::widget::{
@@ -35,7 +37,8 @@ pub fn window_layout(app: &MainPanel) -> Container<'static, Message> {
         .width(Length::Fill)
         .height(Length::Fill),
         WindowMode::Widget => container(column![
-            widget_head_area(app).height(Length::FillPortion(1)),
+            widget_head_area(app),
+            container(video_preview::toolbar(app)).padding(10),
             widget_body_area(app).height(Length::FillPortion(9))
         ]),
         WindowMode::Invalid => container(Space::new(0, 0)),
@@ -93,9 +96,15 @@ fn dashboard_settings_area(app: &MainPanel) -> Container<'static, Message> {
     container(
         column![
             row![
+                video_preview::toolbar(app),
                 Space::with_width(Length::Fill),
                 button_window_mode_change(WindowMode::Dashboard)
             ],
+            if app.preview.placement == Placement::Docked {
+                video_preview::panel(app, false)
+            } else {
+                container(Space::new(0, 0))
+            },
             Scrollable::new(
                 column![settings_area(app), debug_area(app)]
                     .spacing(24)

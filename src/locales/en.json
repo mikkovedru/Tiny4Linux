@@ -35,6 +35,17 @@
     }
   },
   "gui": {
+    "preview": {
+      "title": "Video preview",
+      "detach": "Detach",
+      "dock": "Dock in main window",
+      "dock_short": "Dock",
+      "retry": "Retry preview",
+      "starting": "Starting video preview…",
+      "missing_ffmpeg": "Install FFmpeg to use video preview, then retry.",
+      "failed": "Video preview is unavailable. Close other apps using the camera, then retry.\n\n%{details}",
+      "timed_out": "The camera stopped sending video. Check its connection, wake it if needed, then retry."
+    },
     "buttons": {
       "sleep": {
         "set_sleep": "Set to Sleep",

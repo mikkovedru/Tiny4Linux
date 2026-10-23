@@ -91,6 +91,11 @@ impl Camera {
         self.model
     }
 
+    /// Returns the video device belonging to this camera for a separate capture handle.
+    pub fn video_device_path(&self) -> std::io::Result<std::path::PathBuf> {
+        self.transport.device_path()
+    }
+
     /// Asks an OBSBOT Tiny 4K which tracking mode it is in.
     ///
     /// The answer is picked up from the command channel, retrying until the camera

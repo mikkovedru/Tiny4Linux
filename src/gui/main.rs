@@ -1,16 +1,18 @@
 // SPDX-License-Identifier: EUPL-1.2
 
+mod preview;
 mod styles;
 mod tracking_selection;
 mod ui_modules;
 
 use crate::styles::theme::obsbot_theme;
+use crate::ui_modules::video_preview;
 use crate::ui_modules::window_layout::window_layout;
-use iced::alignment::{Horizontal, Vertical};
 use iced::widget::{Container, column, text};
 use iced::window::Position;
 use iced::{Element, Point};
 use iced::{Length, Size, Subscription, Task, time, window};
+use preview::{Capture, CaptureError, Placement, Preview};
 use rust_i18n::{i18n, set_locale, t};
 use std::time::{Duration, Instant};
 use tiny4linux::{
@@ -24,8 +26,12 @@ i18n!("src/locales", fallback = "en");
 #[derive(Debug, Clone, PartialEq)]
 enum Message {
     RequestWindowModeChange(WindowMode),
-    ApplyWindowMode(WindowMode),
-    ChangeMainWindowId(Option<window::Id>),
+    WindowCloseRequested(window::Id),
+    SetPreviewEnabled(bool),
+    DetachPreview,
+    DockPreview,
+    RetryPreview,
+    PreviewTick,
     ChangeSleeping(bool),
     ChangeTracking(AIMode),
     ChangeTrackingSpeed(TrackingSpeed),
@@ -55,6 +61,7 @@ enum Message {
 
 struct MainPanel {
     camera: Option<Camera>,
+    preview: Preview,
     main_window_id: Option<window::Id>,
     window_mode: WindowMode,
     awake: SleepMode,
@@ -83,8 +90,10 @@ struct MainPanel {
 
 impl MainPanel {
     fn init_state(window_mode: WindowMode) -> (Self, Task<Message>) {
-        let camera = Camera::detect().ok();
+        Self::init_with_camera(Camera::detect().ok(), window_mode)
+    }
 
+    fn init_with_camera(camera: Option<Camera>, window_mode: WindowMode) -> (Self, Task<Message>) {
         let status = camera
             .as_ref()
             .and_then(|c| c.get_status().ok())
@@ -113,10 +122,12 @@ impl MainPanel {
             .map(|c| c.get_custom_presets())
             .unwrap_or_default();
 
+        let (main_id, open_task) = window::open(get_window_settings_for_window_mode(window_mode));
         (
             MainPanel {
                 camera,
-                main_window_id: None,
+                preview: Preview::default(),
+                main_window_id: Some(main_id),
                 window_mode,
                 awake: status.awake,
                 tracking: TrackingSelection::new(tracking),
@@ -141,11 +152,54 @@ impl MainPanel {
                 text_input: String::new(),
                 text_input_02: String::new(),
             },
-            window::get_latest().map(Message::ChangeMainWindowId),
+            open_task.discard(),
         )
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
+        // Window and preview controls must remain usable without a camera.
+        match message {
+            Message::RequestWindowModeChange(mode) => return self.change_window_mode(mode),
+            Message::WindowCloseRequested(id) => {
+                if Some(id) == self.main_window_id {
+                    self.preview.stop();
+                    return iced::exit();
+                }
+                if self.preview.placement == Placement::Detached(id) {
+                    return self.dock_preview();
+                }
+                return Task::none();
+            }
+            Message::SetPreviewEnabled(enabled) => {
+                if enabled && !self.preview.enabled() {
+                    self.start_preview();
+                    if self.window_mode == WindowMode::Widget {
+                        return self.detach_preview();
+                    }
+                } else if !enabled {
+                    return self
+                        .preview
+                        .stop()
+                        .map(window::close)
+                        .unwrap_or_else(Task::none);
+                }
+                return Task::none();
+            }
+            Message::DetachPreview => return self.detach_preview(),
+            Message::DockPreview => return self.dock_preview(),
+            Message::RetryPreview => {
+                if self.preview.enabled() && !self.preview.capturing() {
+                    self.start_preview();
+                }
+                return Task::none();
+            }
+            Message::PreviewTick => {
+                self.preview.poll();
+                return Task::none();
+            }
+            _ => {}
+        }
+
         if message == Message::CheckTracking {
             self.refresh_tracking();
             return Task::none();
@@ -264,28 +318,13 @@ impl MainPanel {
         let camera = self.camera.as_ref().unwrap();
 
         match message {
-            Message::RequestWindowModeChange(new_mode) => {
-                let close_task = self
-                    .main_window_id
-                    .map(|main_window_id| window::close::<Message>(main_window_id))
-                    .unwrap_or_else(Task::none);
-
-                let (new_id, open_task) =
-                    window::open(get_window_settings_for_window_mode(new_mode));
-                let open_task = open_task.map(move |_| Message::ChangeMainWindowId(Some(new_id)));
-
-                let apply_task = Task::done(Message::ApplyWindowMode(new_mode));
-
-                Ok(Task::batch([close_task, open_task, apply_task]))
-            }
-            Message::ApplyWindowMode(new_mode) => {
-                self.window_mode = new_mode;
-                Ok(Task::none())
-            }
-            Message::ChangeMainWindowId(id) => {
-                self.main_window_id = id;
-                Ok(Task::none())
-            }
+            Message::RequestWindowModeChange(_)
+            | Message::WindowCloseRequested(_)
+            | Message::SetPreviewEnabled(_)
+            | Message::DetachPreview
+            | Message::DockPreview
+            | Message::RetryPreview
+            | Message::PreviewTick => Ok(Task::none()),
             Message::ChangeSleeping(should_sleep) => {
                 if should_sleep {
                     self.awake = SleepMode::Sleep;
@@ -443,7 +482,10 @@ impl MainPanel {
         }
     }
 
-    fn view(&'_ self) -> Element<'_, Message> {
+    fn view(&'_ self, id: window::Id) -> Element<'_, Message> {
+        if self.preview.placement == Placement::Detached(id) {
+            return video_preview::detached_window(self);
+        }
         if self.camera.is_some() {
             let content = column![get_current_ui_elements(self)].height(Length::Fill);
             if let Some(error) = &self.operation_error {
@@ -452,10 +494,13 @@ impl MainPanel {
                 content.into()
             }
         } else {
-            text(t!("shared.errors.no_camera"))
-                .size(20)
-                .align_x(Horizontal::Center)
-                .align_y(Vertical::Center)
+            let mut content = column![video_preview::toolbar(self)].spacing(16);
+            if self.preview.placement == Placement::Docked {
+                content = content.push(video_preview::panel(self, false));
+            }
+            content
+                .push(text(t!("shared.errors.no_camera")).size(20))
+                .padding(16)
                 .width(Length::Fill)
                 .height(Length::Fill)
                 .into()
@@ -463,13 +508,83 @@ impl MainPanel {
     }
 
     fn subscription(&self) -> Subscription<Message> {
-        if self.camera.is_none() {
+        let camera = if self.camera.is_none() {
             time::every(Duration::from_secs(4)).map(|_| Message::CheckCamera)
         } else if self.tracking.is_pending() {
             time::every(Duration::from_millis(100)).map(|_| Message::CheckTracking)
         } else {
             time::every(Duration::from_secs(20)).map(|_| Message::CheckCamera)
+        };
+        let preview = if self.preview.capturing() {
+            time::every(Duration::from_millis(66)).map(|_| Message::PreviewTick)
+        } else {
+            Subscription::none()
+        };
+        Subscription::batch([
+            camera,
+            preview,
+            window::close_requests().map(Message::WindowCloseRequested),
+        ])
+    }
+
+    fn title(&self, id: window::Id) -> String {
+        if self.preview.placement == Placement::Detached(id) {
+            format!("Tiny4Linux — {}", t!("gui.preview.title"))
+        } else {
+            "Tiny4Linux".into()
         }
+    }
+
+    fn start_preview(&mut self) {
+        let result = self
+            .camera
+            .as_ref()
+            .ok_or_else(|| CaptureError::Failed(t!("shared.errors.no_camera").to_string()))
+            .and_then(|camera| {
+                let path = camera
+                    .video_device_path()
+                    .map_err(|error| CaptureError::Failed(error.to_string()))?;
+                Capture::start(&path, camera.model())
+            });
+        self.preview.start(result);
+    }
+
+    fn detach_preview(&mut self) -> Task<Message> {
+        if self.preview.placement != Placement::Docked {
+            return Task::none();
+        }
+        let (id, task) = window::open(preview_window_settings());
+        self.preview.detach(id);
+        task.discard()
+    }
+
+    fn dock_preview(&mut self) -> Task<Message> {
+        let Some(id) = self.preview.dock() else {
+            return Task::none();
+        };
+        Task::batch([
+            window::close(id),
+            self.change_window_mode(WindowMode::Dashboard),
+        ])
+    }
+
+    fn change_window_mode(&mut self, mode: WindowMode) -> Task<Message> {
+        if mode == self.window_mode || mode == WindowMode::Invalid {
+            return Task::none();
+        }
+        let detach = if mode == WindowMode::Widget {
+            self.detach_preview()
+        } else {
+            Task::none()
+        };
+        let close = self
+            .main_window_id
+            .map(window::close)
+            .unwrap_or_else(Task::none);
+        let (id, open) = window::open(get_window_settings_for_window_mode(mode));
+        self.main_window_id = Some(id);
+        self.window_mode = mode;
+        Task::batch([detach, close, open.discard()])
     }
 }
 
@@ -512,6 +627,18 @@ fn get_window_settings_for_window_mode(window_mode: WindowMode) -> window::Setti
         max_size: (window_mode != WindowMode::Dashboard).then_some(window_size),
         position: get_position_for_window_mode(window_mode),
         decorations: true,
+        exit_on_close_request: false,
+        ..Default::default()
+    }
+}
+
+fn preview_window_settings() -> window::Settings {
+    window::Settings {
+        size: Size::new(800.0, 520.0),
+        min_size: Some(Size::new(420.0, 300.0)),
+        resizable: true,
+        position: Position::Centered,
+        exit_on_close_request: false,
         ..Default::default()
     }
 }
@@ -553,9 +680,8 @@ fn main() -> iced::Result {
 
     println!("Starting Tiny4Linux in {:?} mode", start_mode);
 
-    iced::application("Tiny4Linux", MainPanel::update, MainPanel::view)
-        .theme(|_| obsbot_theme())
-        .window(get_window_settings_for_window_mode(start_mode))
+    iced::daemon(MainPanel::title, MainPanel::update, MainPanel::view)
+        .theme(|_, _| obsbot_theme())
         .subscription(MainPanel::subscription)
         .run_with(move || MainPanel::init_state(start_mode))
 }
@@ -586,6 +712,65 @@ mod window_tests {
             .expect("the dashboard must remain usable when shrunk");
         assert!(minimum.width < settings.size.width);
         assert!(minimum.height < settings.size.height);
+    }
+
+    #[test]
+    fn preview_actions_work_without_a_camera_and_closing_its_window_docks_it() {
+        let (mut app, _) = MainPanel::init_with_camera(None, WindowMode::Dashboard);
+        let main_id = app.main_window_id;
+        let _ = app.update(Message::SetPreviewEnabled(true));
+        assert_eq!(app.preview.placement, Placement::Docked);
+        assert!(app.preview.error.is_some());
+        let _ = app.update(Message::DetachPreview);
+        let Placement::Detached(id) = app.preview.placement else {
+            panic!("preview should detach");
+        };
+        let _ = app.update(Message::WindowCloseRequested(id));
+        assert_eq!(app.preview.placement, Placement::Docked);
+        assert_eq!(app.main_window_id, main_id);
+        let _ = app.update(Message::SetPreviewEnabled(false));
+        let _ = app.update(Message::WindowCloseRequested(id));
+        assert!(
+            !app.preview.enabled(),
+            "an old window must not reopen the preview"
+        );
+    }
+
+    #[test]
+    fn switching_to_widget_detaches_preview_and_docking_restores_dashboard() {
+        let (mut app, _) = MainPanel::init_with_camera(None, WindowMode::Dashboard);
+        let _ = app.update(Message::SetPreviewEnabled(true));
+        let _ = app.update(Message::RequestWindowModeChange(WindowMode::Widget));
+        assert!(matches!(app.preview.placement, Placement::Detached(_)));
+        assert_eq!(app.window_mode, WindowMode::Widget);
+        let _ = app.update(Message::DockPreview);
+        assert_eq!(app.preview.placement, Placement::Docked);
+        assert_eq!(app.window_mode, WindowMode::Dashboard);
+    }
+
+    #[test]
+    fn closing_the_main_window_turns_preview_off() {
+        let (mut app, _) = MainPanel::init_with_camera(None, WindowMode::Dashboard);
+        let _ = app.update(Message::SetPreviewEnabled(true));
+        let _ = app.update(Message::DetachPreview);
+        let _ = app.update(Message::WindowCloseRequested(app.main_window_id.unwrap()));
+        assert!(!app.preview.enabled());
+    }
+
+    #[test]
+    fn turning_preview_on_in_widget_opens_a_separate_window() {
+        let (mut app, _) = MainPanel::init_with_camera(None, WindowMode::Widget);
+        let _ = app.update(Message::SetPreviewEnabled(true));
+        assert!(matches!(app.preview.placement, Placement::Detached(_)));
+    }
+
+    #[test]
+    fn preview_window_is_resizable_and_uses_managed_close_requests() {
+        let settings = preview_window_settings();
+        assert!(settings.resizable);
+        assert!(settings.max_size.is_none());
+        assert!(!settings.exit_on_close_request);
+        assert!(!get_window_settings_for_window_mode(WindowMode::Dashboard).exit_on_close_request);
     }
 
     #[test]

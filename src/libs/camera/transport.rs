@@ -15,6 +15,10 @@ pub struct CameraTransport {
 }
 
 impl CameraTransport {
+    pub fn device_path(&self) -> std::io::Result<std::path::PathBuf> {
+        self.handle.device_path()
+    }
+
     /// Creates a new instance of the CameraTransport struct.
     ///
     /// This function initializes a new instance by attempting to open a camera

@@ -29,6 +29,7 @@ which itself is substantially based on [samliddicott's meet4k package](https://g
 - **Custom presets** to save and recall the current pan, tilt, and zoom
 - **Pan/Tilt** movement control (GUI and CLI)
 - **Zoom** control (GUI and CLI)
+- Optional **video preview** in the dashboard or a detachable window
 - Support for the **OBSBOT Tiny 3**
 - **CLI** for camera controls (same functions as GUI)
 - Updated Dependencies
@@ -148,6 +149,27 @@ The UI is available in two variants:
 | Dashboard Mode                                                             | Widget Mode                                                                    |
 | -------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
 | <img src="src/assets/screenshot.png" height="400px" alt="Dashboard Mode"/> | <img src="src/assets/screenshot-widget.png" height="400px" alt="Widget Mode"/> |
+
+#### Video preview
+
+Enable **Video preview** to see the camera feed above the dashboard controls.
+Use **Detach** to move it into a resizable window, and **Dock in main window** to
+bring it back. Closing the detached window also docks it back. The stream stays
+open during these moves. Turning the checkbox off releases the camera.
+
+In widget mode, preview opens in a separate window. **Dock** returns to the
+dashboard with the preview embedded.
+
+Preview requires the `ffmpeg` command on your `PATH`; camera controls continue to
+work without it. Install it with your distribution's package manager, for example
+`sudo apt install ffmpeg` on Debian/Ubuntu or `sudo pacman -S ffmpeg` on Arch Linux.
+The preview uses the same OBSBOT camera as the controls and displays a local
+640×360 stream at 15 fps without saving video or capturing audio. The Tiny 4K's
+4:3 capture is fitted inside the preview while preserving its proportions.
+
+If preview cannot start, close other apps using the camera and select **Retry
+preview**. If it stops receiving frames, check the USB connection and wake the
+camera before retrying. Preview stays off until enabled on each app launch.
 
 ### CLI
 

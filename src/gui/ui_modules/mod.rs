@@ -8,4 +8,5 @@ mod button_window_mode_change;
 mod current_stats;
 mod debug_area;
 mod settings_area;
+pub mod video_preview;
 pub mod window_layout;
