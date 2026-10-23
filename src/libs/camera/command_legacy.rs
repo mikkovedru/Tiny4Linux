@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: EUPL-1.2
 
+use crate::libs::camera::frame::crc16_usb;
+
 /// Builder for the *legacy* control frame used by the OBSBOT Tiny 4K (#72).
 ///
 /// The Tiny 4K is architecturally the original OBSBOT Tiny, not a cut-down Tiny 2,
-/// and it does not understand the Tiny 2 frames built by [`crate::command02`].
+/// and it does not understand the Tiny 2 frames built by [`crate::frame`].
 /// It accepts this older frame instead:
 ///
 /// ```text
@@ -20,25 +22,6 @@
 /// The camera does not validate the sequence number.
 const FRAME_HEADER_LENGTH: u8 = 12;
 const FRAME_TYPE_SET: u8 = 0x10;
-
-/// CRC-16/USB: reflected polynomial 0xA001, init 0xFFFF, final xor 0xFFFF.
-fn crc16_usb(bytes: &[u8]) -> u16 {
-    let mut crc: u16 = 0xFFFF;
-
-    for byte in bytes {
-        crc ^= *byte as u16;
-
-        for _ in 0..8 {
-            crc = if crc & 1 != 0 {
-                (crc >> 1) ^ 0xA001
-            } else {
-                crc >> 1
-            };
-        }
-    }
-
-    crc ^ 0xFFFF
-}
 
 /// Builds a legacy frame for the given route, command and payload.
 ///
@@ -88,13 +71,7 @@ pub fn command_legacy_typed(
 #[cfg(test)]
 mod tests {
     mod unit {
-        use crate::libs::camera::command_legacy::{command_legacy, crc16_usb};
-
-        #[test]
-        fn crc_of_the_check_string() {
-            // The CRC-16/USB check value for "123456789" is 0xB4C8.
-            assert_eq!(crc16_usb(b"123456789"), 0xB4C8);
-        }
+        use crate::libs::camera::command_legacy::command_legacy;
 
         /// Both frames were captured from the vendor app driving a Tiny 4K and
         /// replayed successfully against the real camera.

@@ -1,21 +1,26 @@
 // SPDX-License-Identifier: EUPL-1.2
 
 use crate::libs::camera::custom_presets::{CustomPreset, CustomPresetStore};
-use crate::libs::camera::enums::{AIMode, CameraModel, ExposureMode, SleepMode, TrackingSpeed};
+use crate::libs::camera::enums::{
+    AIMode, AutoSleepTime, CameraModel, ExposureMode, FieldOfView, Gesture, NoiseReduction,
+    PickupDistance, SleepBackground, SleepMode, TrackingSpeed,
+};
+use crate::libs::camera::frame::FrameSequence;
 use crate::libs::camera::status::CameraStatus;
 use crate::libs::camera::transport::CameraTransport;
 use crate::libs::errors::T4lError;
 use crate::libs::usbio::{V4L2_CID_PAN_ABSOLUTE, V4L2_CID_TILT_ABSOLUTE};
 use crate::{
-    AIModeCommand, ExposureModeCommand, ExposureModeTypeCommand, GotoPresetPositionCommand,
-    HdrModeCommand, LegacyAiModeCommand, LegacyPresetPositionCommand, LegacySleepCommand,
-    SleepCommand, TrackingSpeedCommand,
+    AIModeCommand, AutoGainCommand, AutoSleepCommand, ExposureModeCommand, ExposureModeTypeCommand,
+    FactoryResetCommand, FieldOfViewCommand, GestureCommand, GestureZoomRatioCommand,
+    GotoPresetPositionCommand, HdrModeCommand, InvertCommand, LedCommand, LegacyAiModeCommand,
+    LegacyPresetPositionCommand, LegacySleepCommand, MicInSleepCommand, MicrophoneCommand,
+    MirrorCommand, NoiseReductionCommand, PickupDistanceCommand, SleepBackgroundCommand,
+    SleepBackgroundMirrorCommand, SleepCommand, TrackingSpeedCommand,
 };
 use errno::Errno;
-use std::sync::atomic::{AtomicU16, Ordering};
 use std::thread::sleep;
 use std::time::Duration;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Pause between two legacy frames sent in one sequence.
 ///
@@ -39,17 +44,20 @@ pub struct Camera {
     transport: CameraTransport,
     model: CameraModel,
     debugging: bool,
-    /// Sequence number for the next legacy request that expects an answer.
-    sequence_nr: AtomicU16,
+    /// Sequence numbers for framed commands, both the Tiny 2 frames and the
+    /// legacy Tiny 4K requests that expect an answer, see [`FrameSequence`].
+    sequence: FrameSequence,
 }
 
 impl Camera {
     pub fn new(hint: &str) -> Result<Self, T4lError> {
+        let transport = CameraTransport::new(hint)?;
+
         Ok(Self {
-            transport: CameraTransport::new(hint)?,
-            model: CameraModel::from_hint(hint),
+            model: CameraModel::detect(hint, transport.card_name().as_deref()),
+            transport,
             debugging: false,
-            sequence_nr: AtomicU16::new(Self::first_sequence_nr()),
+            sequence: FrameSequence::new(),
         })
     }
 
@@ -69,21 +77,18 @@ impl Camera {
         self.transport.send_cmd(unit, selector, cmd, self.debugging)
     }
 
-    pub fn get_status(&self) -> Result<CameraStatus, T4lError> {
-        self.transport.get_status(self.debugging, self.model)
+    /// Returns a fresh sequence number for the next framed command (unit 2, selector 2).
+    ///
+    /// The Tiny 4K legacy requests take their numbers from the same counter. The
+    /// camera keeps the previous answer on its command channel, and that answer
+    /// outlives the process that asked for it, so the counter is seeded from the
+    /// clock and differs between runs (#72).
+    pub fn next_sequence_nr(&self) -> u16 {
+        self.sequence.next()
     }
 
-    /// Starting point for the sequence numbers of requests that expect an answer.
-    ///
-    /// The camera keeps the previous answer on its command channel, and that answer
-    /// outlives the process that asked for it. Starting every run at the same number
-    /// would therefore accept the answer to a *previous* run's request, so the
-    /// counter starts somewhere that differs between runs (#72).
-    fn first_sequence_nr() -> u16 {
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|since_epoch| since_epoch.subsec_nanos() as u16)
-            .unwrap_or(1)
+    pub fn get_status(&self) -> Result<CameraStatus, T4lError> {
+        self.transport.get_status(self.debugging, self.model)
     }
 
     /// The model this camera was detected as, see [`CameraModel`].
@@ -96,7 +101,7 @@ impl Camera {
     /// The answer is picked up from the command channel, retrying until the camera
     /// returns the answer to our own request rather than the previous one (#72).
     fn read_ai_mode_tiny_4k(&self) -> Result<AIMode, T4lError> {
-        let sequence_nr = self.sequence_nr.fetch_add(1, Ordering::Relaxed);
+        let sequence_nr = self.next_sequence_nr();
 
         self.send_cmd(0x2, 0x2, &LegacyAiModeCommand::status_request(sequence_nr))?;
 
@@ -135,6 +140,18 @@ impl Camera {
         self.model.supports_manual_exposure()
     }
 
+    /// Whether this camera takes the auto-sleep, LED, field of view, mirror, audio,
+    /// gesture and factory reset settings, see [`CameraModel::supports_extended_settings`].
+    pub fn supports_extended_settings(&self) -> bool {
+        self.model.supports_extended_settings()
+    }
+
+    /// Whether the status of this camera reports those settings, see
+    /// [`CameraModel::reports_extended_status`].
+    pub fn reports_extended_status(&self) -> bool {
+        self.model.reports_extended_status()
+    }
+
     pub fn dump(&self) -> Result<(), Errno> {
         self.transport.dump()
     }
@@ -171,6 +188,27 @@ pub trait Tiny2Camera {
     fn recall_custom_preset(&self, name: &str) -> Result<(), T4lError>;
     fn delete_custom_preset(&self, name: &str) -> Result<(), T4lError>;
     fn get_custom_presets(&self) -> Vec<CustomPreset>;
+    fn set_auto_sleep(&self, time: AutoSleepTime) -> Result<(), T4lError>;
+    /// Turns auto-sleep off while keeping the configured time, like OBSBOT Center does.
+    fn disable_auto_sleep(&self) -> Result<(), T4lError>;
+    fn set_sleep_background(&self, background: SleepBackground) -> Result<(), T4lError>;
+    fn set_sleep_background_mirror(&self, mirrored: bool) -> Result<(), T4lError>;
+    fn set_led_brightness(&self, brightness: u8) -> Result<(), T4lError>;
+    fn set_field_of_view(&self, fov: FieldOfView) -> Result<(), T4lError>;
+    fn set_mirror(&self, mirrored: bool) -> Result<(), T4lError>;
+    /// Turns view and gimbal upside down. The camera does not report this setting back.
+    fn set_invert(&self, inverted: bool) -> Result<(), T4lError>;
+    fn set_mic_in_sleep(&self, enabled: bool) -> Result<(), T4lError>;
+    fn set_noise_reduction(&self, level: NoiseReduction) -> Result<(), T4lError>;
+    fn set_auto_gain(&self, enabled: bool) -> Result<(), T4lError>;
+    fn set_pickup_distance(&self, distance: PickupDistance) -> Result<(), T4lError>;
+    /// Enables or disables the microphone. Disabling it makes the camera restart.
+    fn set_microphone(&self, enabled: bool) -> Result<(), T4lError>;
+    fn set_gesture(&self, gesture: Gesture, enabled: bool) -> Result<(), T4lError>;
+    /// Sets how far the zoom gesture zooms in (1.0 to 4.0). The camera does not report it back.
+    fn set_gesture_zoom_ratio(&self, ratio: f32) -> Result<(), T4lError>;
+    /// Resets the camera to its factory settings. The camera restarts afterwards.
+    fn factory_reset(&self) -> Result<(), T4lError>;
     fn set_debugging(&mut self, debugging: bool);
 }
 
@@ -182,7 +220,11 @@ impl Tiny2Camera for Camera {
     /// selector 2.
     fn set_sleep_mode(&self, mode: SleepMode) -> Result<(), T4lError> {
         match self.model {
-            CameraModel::Tiny2 => self.send_cmd(0x2, 0x2, &SleepCommand::build(mode)?),
+            CameraModel::Tiny2 | CameraModel::Tiny2Lite => self.send_cmd(
+                0x2,
+                0x2,
+                &SleepCommand::build(mode, self.next_sequence_nr())?,
+            ),
             CameraModel::Tiny4K => self.send_cmd(0x2, 0x2, &LegacySleepCommand::build(mode)?),
         }
     }
@@ -197,7 +239,9 @@ impl Tiny2Camera for Camera {
     /// sequence of legacy frames on selector 2 instead (#72).
     fn set_ai_mode(&self, mode: AIMode) -> Result<(), T4lError> {
         match self.model {
-            CameraModel::Tiny2 => self.send_cmd(0x2, 0x6, &AIModeCommand::build(mode)?),
+            CameraModel::Tiny2 | CameraModel::Tiny2Lite => {
+                self.send_cmd(0x2, 0x6, &AIModeCommand::build(mode)?)
+            }
             CameraModel::Tiny4K => {
                 for (index, frame) in LegacyAiModeCommand::build(mode)?.iter().enumerate() {
                     if index > 0 {
@@ -218,7 +262,7 @@ impl Tiny2Camera for Camera {
     /// zero and answers a separate request instead (#72).
     fn get_ai_mode(&self) -> Result<AIMode, T4lError> {
         match self.model {
-            CameraModel::Tiny2 => Ok(self.get_status()?.ai_mode),
+            CameraModel::Tiny2 | CameraModel::Tiny2Lite => Ok(self.get_status()?.ai_mode),
             CameraModel::Tiny4K => self.read_ai_mode_tiny_4k(),
         }
     }
@@ -230,9 +274,11 @@ impl Tiny2Camera for Camera {
     /// move (#72). Presets are stored by the vendor app; this only recalls them.
     fn goto_preset_position(&self, preset_nr: i8) -> Result<(), T4lError> {
         match self.model {
-            CameraModel::Tiny2 => {
-                self.send_cmd(0x2, 0x2, &GotoPresetPositionCommand::build(preset_nr)?)
-            }
+            CameraModel::Tiny2 | CameraModel::Tiny2Lite => self.send_cmd(
+                0x2,
+                0x2,
+                &GotoPresetPositionCommand::build(preset_nr, self.next_sequence_nr())?,
+            ),
             CameraModel::Tiny4K => {
                 let slot = u8::try_from(preset_nr).map_err(|_| {
                     T4lError::UnsupportedIntValue("preset position".to_string(), preset_nr as i32)
@@ -261,7 +307,7 @@ impl Tiny2Camera for Camera {
     }
 
     fn set_tracking_speed(&self, speed: TrackingSpeed) -> Result<(), T4lError> {
-        let cmd = TrackingSpeedCommand::build(speed)?;
+        let cmd = TrackingSpeedCommand::build(speed, self.next_sequence_nr())?;
 
         self.send_cmd(0x2, 0x2, &cmd)
     }
@@ -273,7 +319,8 @@ impl Tiny2Camera for Camera {
     }
 
     fn set_exposure_mode(&self, mode: ExposureMode) -> Result<(), T4lError> {
-        let exposure_mode_type_command = ExposureModeTypeCommand::build(mode);
+        let exposure_mode_type_command =
+            ExposureModeTypeCommand::build(mode, self.next_sequence_nr());
 
         self.send_cmd(0x2, 0x2, &exposure_mode_type_command)?;
 
@@ -282,6 +329,88 @@ impl Tiny2Camera for Camera {
         }
 
         Ok(())
+    }
+
+    // The settings below (#174) were verified on a Tiny 2 Lite only. The Tiny 2 and
+    // Tiny 3 share its command family but are unverified; the Tiny 4K has none of
+    // them. Callers check `supports_extended_settings` first, as with the other
+    // model-specific settings.
+    fn set_auto_sleep(&self, time: AutoSleepTime) -> Result<(), T4lError> {
+        self.send_cmd(0x2, 0x6, &AutoSleepCommand::build(time))
+    }
+
+    fn disable_auto_sleep(&self) -> Result<(), T4lError> {
+        let current = self.get_status()?.auto_sleep;
+
+        self.set_auto_sleep(current.disabled())
+    }
+
+    fn set_sleep_background(&self, background: SleepBackground) -> Result<(), T4lError> {
+        self.send_cmd(0x2, 0x6, &SleepBackgroundCommand::build(background)?)
+    }
+
+    fn set_sleep_background_mirror(&self, mirrored: bool) -> Result<(), T4lError> {
+        self.send_cmd(0x2, 0x6, &SleepBackgroundMirrorCommand::build(mirrored))
+    }
+
+    fn set_led_brightness(&self, brightness: u8) -> Result<(), T4lError> {
+        self.send_cmd(0x2, 0x6, &LedCommand::build(brightness)?)
+    }
+
+    fn set_field_of_view(&self, fov: FieldOfView) -> Result<(), T4lError> {
+        self.send_cmd(0x2, 0x6, &FieldOfViewCommand::build(fov)?)
+    }
+
+    fn set_mirror(&self, mirrored: bool) -> Result<(), T4lError> {
+        self.send_cmd(0x2, 0x6, &MirrorCommand::build(mirrored))
+    }
+
+    fn set_invert(&self, inverted: bool) -> Result<(), T4lError> {
+        self.send_cmd(
+            0x2,
+            0x2,
+            &InvertCommand::build(inverted, self.next_sequence_nr()),
+        )
+    }
+
+    fn set_mic_in_sleep(&self, enabled: bool) -> Result<(), T4lError> {
+        self.send_cmd(0x2, 0x6, &MicInSleepCommand::build(enabled))
+    }
+
+    fn set_noise_reduction(&self, level: NoiseReduction) -> Result<(), T4lError> {
+        self.send_cmd(0x2, 0x6, &NoiseReductionCommand::build(level)?)
+    }
+
+    fn set_auto_gain(&self, enabled: bool) -> Result<(), T4lError> {
+        self.send_cmd(0x2, 0x6, &AutoGainCommand::build(enabled))
+    }
+
+    fn set_pickup_distance(&self, distance: PickupDistance) -> Result<(), T4lError> {
+        self.send_cmd(0x2, 0x6, &PickupDistanceCommand::build(distance)?)
+    }
+
+    fn set_microphone(&self, enabled: bool) -> Result<(), T4lError> {
+        self.send_cmd(0x2, 0x6, &MicrophoneCommand::build(enabled))
+    }
+
+    fn set_gesture(&self, gesture: Gesture, enabled: bool) -> Result<(), T4lError> {
+        let cmd = GestureCommand::build(gesture, enabled, self.next_sequence_nr());
+
+        self.send_cmd(0x2, 0x2, &cmd)
+    }
+
+    fn set_gesture_zoom_ratio(&self, ratio: f32) -> Result<(), T4lError> {
+        let cmd = GestureZoomRatioCommand::build(ratio, self.next_sequence_nr())?;
+
+        self.send_cmd(0x2, 0x2, &cmd)
+    }
+
+    fn factory_reset(&self) -> Result<(), T4lError> {
+        self.send_cmd(
+            0x2,
+            0x2,
+            &FactoryResetCommand::build(self.next_sequence_nr()),
+        )
     }
 
     fn set_debugging(&mut self, debugging: bool) {
