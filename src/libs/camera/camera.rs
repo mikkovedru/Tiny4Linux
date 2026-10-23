@@ -2,6 +2,7 @@
 
 use crate::libs::camera::custom_presets::{CustomPreset, CustomPresetStore};
 use crate::libs::camera::enums::{AIMode, CameraModel, ExposureMode, SleepMode, TrackingSpeed};
+use crate::libs::camera::frame::FrameSequence;
 use crate::libs::camera::status::CameraStatus;
 use crate::libs::camera::transport::CameraTransport;
 use crate::libs::errors::T4lError;
@@ -12,10 +13,8 @@ use crate::{
     SleepCommand, TrackingSpeedCommand,
 };
 use errno::Errno;
-use std::sync::atomic::{AtomicU16, Ordering};
 use std::thread::sleep;
 use std::time::Duration;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Pause between two legacy frames sent in one sequence.
 ///
@@ -39,8 +38,9 @@ pub struct Camera {
     transport: CameraTransport,
     model: CameraModel,
     debugging: bool,
-    /// Sequence number for the next legacy request that expects an answer.
-    sequence_nr: AtomicU16,
+    /// Sequence numbers for framed commands, both the Tiny 2 frames and the
+    /// legacy Tiny 4K requests that expect an answer, see [`FrameSequence`].
+    sequence: FrameSequence,
 }
 
 impl Camera {
@@ -51,7 +51,7 @@ impl Camera {
             model: CameraModel::detect(hint, transport.card_name().as_deref()),
             transport,
             debugging: false,
-            sequence_nr: AtomicU16::new(Self::first_sequence_nr()),
+            sequence: FrameSequence::new(),
         })
     }
 
@@ -71,21 +71,18 @@ impl Camera {
         self.transport.send_cmd(unit, selector, cmd, self.debugging)
     }
 
-    pub fn get_status(&self) -> Result<CameraStatus, T4lError> {
-        self.transport.get_status(self.debugging, self.model)
+    /// Returns a fresh sequence number for the next framed command (unit 2, selector 2).
+    ///
+    /// The Tiny 4K legacy requests take their numbers from the same counter. The
+    /// camera keeps the previous answer on its command channel, and that answer
+    /// outlives the process that asked for it, so the counter is seeded from the
+    /// clock and differs between runs (#72).
+    pub fn next_sequence_nr(&self) -> u16 {
+        self.sequence.next()
     }
 
-    /// Starting point for the sequence numbers of requests that expect an answer.
-    ///
-    /// The camera keeps the previous answer on its command channel, and that answer
-    /// outlives the process that asked for it. Starting every run at the same number
-    /// would therefore accept the answer to a *previous* run's request, so the
-    /// counter starts somewhere that differs between runs (#72).
-    fn first_sequence_nr() -> u16 {
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|since_epoch| since_epoch.subsec_nanos() as u16)
-            .unwrap_or(1)
+    pub fn get_status(&self) -> Result<CameraStatus, T4lError> {
+        self.transport.get_status(self.debugging, self.model)
     }
 
     /// The model this camera was detected as, see [`CameraModel`].
@@ -98,7 +95,7 @@ impl Camera {
     /// The answer is picked up from the command channel, retrying until the camera
     /// returns the answer to our own request rather than the previous one (#72).
     fn read_ai_mode_tiny_4k(&self) -> Result<AIMode, T4lError> {
-        let sequence_nr = self.sequence_nr.fetch_add(1, Ordering::Relaxed);
+        let sequence_nr = self.next_sequence_nr();
 
         self.send_cmd(0x2, 0x2, &LegacyAiModeCommand::status_request(sequence_nr))?;
 
@@ -184,9 +181,11 @@ impl Tiny2Camera for Camera {
     /// selector 2.
     fn set_sleep_mode(&self, mode: SleepMode) -> Result<(), T4lError> {
         match self.model {
-            CameraModel::Tiny2 | CameraModel::Tiny2Lite => {
-                self.send_cmd(0x2, 0x2, &SleepCommand::build(mode)?)
-            }
+            CameraModel::Tiny2 | CameraModel::Tiny2Lite => self.send_cmd(
+                0x2,
+                0x2,
+                &SleepCommand::build(mode, self.next_sequence_nr())?,
+            ),
             CameraModel::Tiny4K => self.send_cmd(0x2, 0x2, &LegacySleepCommand::build(mode)?),
         }
     }
@@ -236,9 +235,11 @@ impl Tiny2Camera for Camera {
     /// move (#72). Presets are stored by the vendor app; this only recalls them.
     fn goto_preset_position(&self, preset_nr: i8) -> Result<(), T4lError> {
         match self.model {
-            CameraModel::Tiny2 | CameraModel::Tiny2Lite => {
-                self.send_cmd(0x2, 0x2, &GotoPresetPositionCommand::build(preset_nr)?)
-            }
+            CameraModel::Tiny2 | CameraModel::Tiny2Lite => self.send_cmd(
+                0x2,
+                0x2,
+                &GotoPresetPositionCommand::build(preset_nr, self.next_sequence_nr())?,
+            ),
             CameraModel::Tiny4K => {
                 let slot = u8::try_from(preset_nr).map_err(|_| {
                     T4lError::UnsupportedIntValue("preset position".to_string(), preset_nr as i32)
@@ -267,7 +268,7 @@ impl Tiny2Camera for Camera {
     }
 
     fn set_tracking_speed(&self, speed: TrackingSpeed) -> Result<(), T4lError> {
-        let cmd = TrackingSpeedCommand::build(speed)?;
+        let cmd = TrackingSpeedCommand::build(speed, self.next_sequence_nr())?;
 
         self.send_cmd(0x2, 0x2, &cmd)
     }
@@ -279,7 +280,8 @@ impl Tiny2Camera for Camera {
     }
 
     fn set_exposure_mode(&self, mode: ExposureMode) -> Result<(), T4lError> {
-        let exposure_mode_type_command = ExposureModeTypeCommand::build(mode);
+        let exposure_mode_type_command =
+            ExposureModeTypeCommand::build(mode, self.next_sequence_nr());
 
         self.send_cmd(0x2, 0x2, &exposure_mode_type_command)?;
 
